@@ -3,7 +3,7 @@
 // Fresu Electronics · Avatar A & B scoring
 // ============================================================
 
-const CURRENT_VERSION = '1.1.0';
+const CURRENT_VERSION = '1.2.0';
 const GITHUB_REPO     = 'dariofresu/linkedin-lead-scorer';
 
 const SCORING_PROMPT = `You score LinkedIn profiles as leads for Dario Fresu, Principal EMC Architect at Fresu Electronics.
@@ -35,7 +35,7 @@ const FREE_MODELS = [
 const PROVIDERS = {
   openrouter: {
     name: 'OpenRouter', color: '#6d4aff',
-    sub: 'Free · Many models · openrouter.ai',
+    sub: 'Free models · Low daily limits · May rate-limit',
     keyUrl: 'https://openrouter.ai/keys',
     async call(key, model, p) {
       const r = await fetch('https://openrouter.ai/api/v1/chat/completions', {
@@ -50,8 +50,8 @@ const PROVIDERS = {
     }
   },
   groq: {
-    name: 'Groq', color: '#f55036',
-    sub: 'Free · 30 req/min · console.groq.com',
+    name: 'Groq ⭐ Recommended', color: '#f55036',
+    sub: 'Free · 30 req/min · Fast · console.groq.com',
     keyUrl: 'https://console.groq.com/keys',
     async call(key, model, p) {
       const r = await fetch('https://api.groq.com/openai/v1/chat/completions', {
@@ -115,7 +115,7 @@ function parseScore(text) {
 let S = {
   phase: 'loading',        // loading | setup | home | analyzing | results
   showSettings: false,
-  provider: 'openrouter',
+  provider: 'groq',
   model: FREE_MODELS[0].id,
   apiKey: '',
   onLinkedIn: false,
@@ -603,22 +603,51 @@ async function startScan() {
     const results = [];
     const callFn = PROVIDERS[S.provider].call.bind(PROVIDERS[S.provider]);
 
+    // Delay between calls to avoid rate limits
+    // OpenRouter free: be conservative. Groq: fast. Others: moderate.
+    const delayMs = S.provider === 'groq' ? 500 : S.provider === 'openrouter' ? 2000 : 800;
+
     let firstError = null;
     for (let i = 0; i < profiles.length; i++) {
       const p = profiles[i];
       S.progress    = Math.round(((i + 0.5) / profiles.length) * 100);
-      S.progressText = `Analyzing ${p.name}...`;
+      S.progressText = `Analyzing ${p.name}... (${i + 1}/${profiles.length})`;
       updateProgressUI();
 
-      try {
-        const scored = await callFn(getKey(), S.model, p);
+      // Delay between calls (skip first)
+      if (i > 0) await sleep(delayMs);
+
+      // Try up to 3 times on 429
+      let scored = null;
+      let lastErr = null;
+      for (let attempt = 0; attempt < 3; attempt++) {
+        try {
+          scored = await callFn(getKey(), S.model, p);
+          lastErr = null;
+          break;
+        } catch (e) {
+          lastErr = e;
+          const msg = String(e.message || e);
+          if (/429|rate.?limit|too many/i.test(msg)) {
+            // Wait longer and retry
+            const wait = (attempt + 1) * 4000;
+            S.progressText = `Rate limited — waiting ${wait/1000}s before retry...`;
+            updateProgressUI();
+            await sleep(wait);
+          } else {
+            break; // Not a rate limit error — don't retry
+          }
+        }
+      }
+
+      if (scored) {
         results.push({ ...p, ...scored });
-        firstError = null; // Reset on success
-      } catch (e) {
-        const errMsg = String(e.message || e).slice(0, 120);
-        console.error('Scoring error for', p.name, ':', e);
-        results.push({ ...p, score: 0, category: 'skip', avatar: 'none', signals: ['⚠ API Error'], reasoning: errMsg, action: 'Do not connect' });
-        // Show alert on first error and stop if it looks like auth/config issue
+        firstError = null;
+      } else {
+        const errMsg = String(lastErr?.message || lastErr || 'Unknown error').slice(0, 150);
+        console.error('Scoring error for', p.name, ':', lastErr);
+        results.push({ ...p, score: 0, category: 'skip', avatar: 'none', signals: ['⚠ ' + errMsg.slice(0, 60)], reasoning: errMsg, action: 'Do not connect' });
+
         if (!firstError) {
           firstError = errMsg;
           if (/401|403|invalid|unauthorized|key|auth/i.test(errMsg)) {
@@ -628,8 +657,24 @@ async function startScan() {
             S.phase = 'results';
             S.filter = 'all';
             render();
-            alert('API Error: ' + errMsg + '\n\nCheck your API key in Settings.');
+            alert('API auth error: ' + errMsg + '\n\nOpen Settings and check your API key.');
             return;
+          }
+          if (/429|rate.?limit|too many/i.test(errMsg)) {
+            // Offer to switch provider
+            const sw = confirm(
+              'Rate limit hit after 3 retries.\n\n' + errMsg +
+              '\n\nTip: Switch to Groq in Settings — it has 30 req/min free.\n\nAbort and show partial results?'
+            );
+            if (sw) {
+              S.results = results;
+              S.progress = 100;
+              chrome.storage.local.set({ results });
+              S.phase = 'results';
+              S.filter = 'all';
+              render();
+              return;
+            }
           }
         }
       }
