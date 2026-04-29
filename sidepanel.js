@@ -725,75 +725,58 @@ function sleep(ms) { return new Promise(r => setTimeout(r, ms)); }
 // UPDATE CHECKER
 // ============================================================
 async function checkForUpdates() {
-  const btn = document.getElementById('btn-check-update');
+  const btn    = document.getElementById('btn-check-update');
   const status = document.getElementById('update-status');
   if (!status) return;
 
   status.style.display = 'block';
-  status.style.color = '#9ca3af';
-  status.textContent = 'Checking GitHub...';
+  status.style.color   = '#9ca3af';
+  status.textContent   = 'Checking GitHub...';
   if (btn) btn.disabled = true;
 
   try {
-    const repo = GITHUB_REPO.replace('OWNER/', '') !== 'linkedin-lead-scorer'
-      ? GITHUB_REPO : null;
+    // Get latest commit on main branch
+    const r = await fetch(
+      `https://api.github.com/repos/${GITHUB_REPO}/commits/main`,
+      { headers: { 'Accept': 'application/vnd.github.v3+json' } }
+    );
 
-    if (!repo || repo.startsWith('OWNER/')) {
-      status.style.color = '#d97706';
-      status.textContent = 'GitHub repo not configured yet. Set GITHUB_REPO in sidepanel.js.';
-      return;
+    if (!r.ok) throw new Error(`GitHub API ${r.status}`);
+
+    const data  = await r.json();
+    const latestSha  = data.sha?.slice(0, 7);
+    const latestDate = data.commit?.committer?.date
+      ? new Date(data.commit.committer.date).toLocaleDateString('en-GB', { day:'numeric', month:'short', year:'numeric' })
+      : '';
+    const latestMsg  = data.commit?.message?.split('\n')[0] || '';
+
+    // Get stored SHA (set when extension was last updated)
+    const stored = await chrome.storage.local.get(['installedSha']);
+    const installedSha = stored.installedSha;
+
+    if (!installedSha) {
+      // First check — store current SHA as baseline
+      await chrome.storage.local.set({ installedSha: data.sha });
+      status.style.color  = '#15803d';
+      status.textContent  = `✓ Baseline set (${latestSha} · ${latestDate}). You'll see updates from now on.`;
+    } else if (data.sha === installedSha) {
+      status.style.color  = '#15803d';
+      status.textContent  = `✓ Up to date — ${latestSha} · ${latestDate}`;
+    } else {
+      const installedShort = installedSha.slice(0, 7);
+      status.style.color  = '#d97706';
+      status.innerHTML    =
+        `⬆ Update available: <strong>${latestMsg}</strong> (${latestDate})<br>` +
+        `Run <code style="background:#fef3c7;padding:1px 5px;border-radius:3px;font-size:10px;">git pull</code> ` +
+        `in the extension folder, then reload the extension in chrome://extensions`;
     }
-
-    const r = await fetch(`https://api.github.com/repos/${repo}/releases/latest`, {
-      headers: { 'Accept': 'application/vnd.github.v3+json' }
-    });
-
-    if (!r.ok) {
-      // Fallback: check latest commit tag via tags endpoint
-      const r2 = await fetch(`https://api.github.com/repos/${repo}/tags`);
-      const tags = await r2.json();
-      if (!tags?.length) throw new Error('No releases found');
-      const latest = tags[0].name.replace(/^v/, '');
-      showUpdateStatus(status, latest);
-      return;
-    }
-
-    const data = await r.json();
-    const latest = (data.tag_name || '').replace(/^v/, '');
-    showUpdateStatus(status, latest);
 
   } catch (e) {
-    status.style.color = '#dc2626';
-    status.textContent = 'Could not reach GitHub: ' + String(e.message).slice(0, 80);
+    status.style.color  = '#dc2626';
+    status.textContent  = 'Could not reach GitHub: ' + String(e.message).slice(0, 80);
   } finally {
     if (btn) btn.disabled = false;
   }
-}
-
-function showUpdateStatus(el, latestVersion) {
-  const current = CURRENT_VERSION;
-  if (!latestVersion) {
-    el.style.color = '#9ca3af';
-    el.textContent = 'Could not determine latest version.';
-    return;
-  }
-  if (latestVersion === current || compareVersions(latestVersion, current) <= 0) {
-    el.style.color = '#15803d';
-    el.textContent = '✓ You are up to date (v' + current + ')';
-  } else {
-    el.style.color = '#d97706';
-    el.innerHTML = '⬆ Update available: v' + latestVersion + ' → run <code style="background:#fef3c7;padding:1px 5px;border-radius:3px;">git pull</code> then reload the extension';
-  }
-}
-
-function compareVersions(a, b) {
-  const pa = a.split('.').map(Number);
-  const pb = b.split('.').map(Number);
-  for (let i = 0; i < 3; i++) {
-    if ((pa[i] || 0) > (pb[i] || 0)) return 1;
-    if ((pa[i] || 0) < (pb[i] || 0)) return -1;
-  }
-  return 0;
 }
 
 // ============================================================
