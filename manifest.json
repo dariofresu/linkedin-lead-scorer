@@ -1,8 +1,8 @@
 {
   "manifest_version": 3,
   "name": "LinkedIn Lead Scorer",
-  "version": "1.2.0",
-  "description": "Score LinkedIn connection requests against Avatar A & B. For Fresu Electronics.",
+  "version": "1.2.2",
+  "description": "Score LinkedIn connection requests against Avatar A & B criteria. Built for EMC/hardware sales professionals.",
   "permissions": ["sidePanel", "storage", "tabs", "activeTab", "scripting"],
   "host_permissions": [
     "https://www.linkedin.com/*",
@@ -19,5 +19,10 @@
     "js": ["content.js"],
     "run_at": "document_idle"
   }],
-  "action": { "default_title": "LinkedIn Lead Scorer" }
+  "action": { "default_title": "LinkedIn Lead Scorer" },
+  "icons": {
+    "16": "icon16.png",
+    "48": "icon48.png",
+    "128": "icon128.png"
+  }
 }
